@@ -76,6 +76,60 @@ void writeReg(uint8_t csPin, uint8_t addr, uint8_t length, uint8_t* data)
   digitalWrite(csPin, HIGH);
 }
 
+void transmit(uint8_t csPin, uint8_t cePin, uint8_t length, uint8_t* data)
+{
+  digitalWrite(csPin, LOW);
+  SPI.begin();
+  SPI.transfer(0xA0);
+  while(length > 0)
+  {
+    SPI.transfer(*data);
+    ++data;
+    --length;
+  }
+  SPI.end();
+  digitalWrite(csPin, HIGH);
+  
+  /*digitalWrite(cePin, HIGH);
+  delayMicroseconds(20);
+  digitalWrite(cePin, LOW);*/
+}
+
+void receive(uint8_t csPin, uint8_t cePin, uint8_t length, uint8_t* data)
+{
+  digitalWrite(cePin, LOW);
+  
+  digitalWrite(csPin, LOW);
+  SPI.begin();
+  SPI.transfer(0x61);
+  while(length > 0)
+  {
+    *data = SPI.transfer(0xFF);
+    ++data;
+    --length;
+  }
+  SPI.end();
+  digitalWrite(csPin, HIGH);
+  
+  digitalWrite(cePin, HIGH);
+}
+
+void flushTX(uint8_t csPin)
+{
+  digitalWrite(csPin, LOW);
+  SPI.begin();
+  SPI.transfer(0xE1);
+  digitalWrite(csPin, HIGH);
+}
+
+void flushRX(uint8_t csPin)
+{
+  digitalWrite(csPin, LOW);
+  SPI.begin();
+  SPI.transfer(0xE2);
+  digitalWrite(csPin, HIGH);
+}
+
 void initTX(uint8_t csPin)
 {
   writeReg(csPin, REG_CONFIG, 0x0E); // EN_CRC, CRCO, PWR_UP
@@ -118,6 +172,31 @@ void initRX(uint8_t csPin)
   writeReg(csPin, REG_FEATURE, 0);
 }
 
+void dumpStatus(uint8_t statusReg)
+{
+  Serial.print("Status: ");
+  if(statusReg & (1<<6))
+    Serial.print("RX_DR; ");
+  if(statusReg & (1<<5))
+    Serial.print("TX_DS; ");
+  if(statusReg & (1<<4))
+    Serial.print("MAX_RT; ");
+  if(statusReg & (1<<0))
+    Serial.print("TX_FULL; ");
+  uint8_t rxPipeNo = (statusReg >> 1) & 0x7;
+  if(rxPipeNo == 0x7)
+    Serial.print("RX FIFO empty");
+  else
+  {
+    Serial.print("RX FIFO ");
+    Serial.print(rxPipeNo, DEC);
+    Serial.print(" contains data");
+  }
+  Serial.println();
+}
+
+static const char helloWorld[32] = "Hello World!";
+
 void setup()
 {
   pinMode(CE_0, OUTPUT);
@@ -147,26 +226,78 @@ void setup()
   
   Serial.begin(115200);
   
+  // wait for module to boot up (generously)
   delay(250);
   
   initTX(CS_0);
   initRX(CS_1);
+  
+  // wait for power on (generously)
   delay(250);
+  
   Serial.println("Unit 0:");
   dump_regs(CS_0);
   Serial.println("Unit 1:");
   dump_regs(CS_1);
+  
+  digitalWrite(CE_1, HIGH);
+  digitalWrite(CE_0, HIGH);
+  
+  transmit(CS_0, CE_0, sizeof(helloWorld), (uint8_t*)helloWorld);
 }
 
+
 void loop()
-{
-  // dump_regs();
-  delay(1000);
+{  
+  if(digitalRead(IRQ_0) != HIGH)
+  {
+    uint8_t statusRegister;
+    readReg(CS_0, REG_STATUS, 1, &statusRegister);
+        
+    if(statusRegister & (1<<5))
+    {
+      Serial.println("IRQ 0 reason: Data was sent!");
+      dump_regs(CS_0);
+      flushTX(CS_0);
+      writeReg(CS_0, REG_STATUS, 0x70);
+      delay(2000);
+      transmit(CS_0, CE_0, sizeof(helloWorld), (uint8_t*)helloWorld);
+    }
+    else if(statusRegister & (1<<4))
+    {
+      Serial.println("IRQ 0 reason: Max retransmissions hit!");
+      dumpStatus(statusRegister);
+      flushTX(CS_0);
+      writeReg(CS_0, REG_STATUS, 0x70);
+      // re-read status register
+      readReg(CS_0, REG_STATUS, 1, &statusRegister);
+      dumpStatus(statusRegister);
+      delay(2000);
+      transmit(CS_0, CE_0, sizeof(helloWorld), (uint8_t*)helloWorld);
+    }
+  }
+  
+  if(digitalRead(IRQ_1) != HIGH)
+  {
+    Serial.println("IRQ 1 asserted");
+    uint8_t statusRegister;
+    readReg(CS_1, REG_STATUS, 1, &statusRegister);
+    char buf[32];
+    receive(CS_1, CE_1, sizeof(buf), (uint8_t*)buf);
+    Serial.println("Received data!");
+    for(int i=0; i<32; ++i)
+      Serial.write(buf[i]);
+    Serial.println();
+    
+    // clear status register
+    writeReg(CS_1, REG_STATUS, 0x70);
+  }
 }
 
 #if 1
 //#ifdef DUMP_REGS
 
+  
 void dump_regs(uint8_t pin)
 {
   uint8_t val;
@@ -254,7 +385,7 @@ void dump_regs(uint8_t pin)
   // BEGIN SETUP_RETR register  
   readReg(pin, 0x04, 1, &val);
   Serial.print("Auto Retransmit Interval: ");
-  uint16_t interval = (val & 0xF0) >> 8;
+  uint16_t interval = (val & 0xF0) >> 4;
   interval += 1;
   interval *= 250;
   Serial.print(interval, DEC);
@@ -304,14 +435,14 @@ void dump_regs(uint8_t pin)
   Serial.print("");
   Serial.print((val & (1<<6)) ? "Data Ready; " : "No Data Ready; ");
   Serial.print((val & (1<<5)) ? "Data Sent; " : "Data Not Sent; ");
-  Serial.print((val & (1<<5)) ? "Max Retransmits Hit; " : "Max Retransmits Not Hit; ");
+  Serial.print((val & (1<<4)) ? "Max Retransmits Hit; " : "Max Retransmits Not Hit; ");
   uint8_t plno = (val>>1) & 0x7;
   switch(plno)
   {
     case 0: case 1: case 2: case 3: case 4: case 5:
       Serial.print("RX FIFO has data from pipe ");
       Serial.print(plno, DEC);
-      Serial.print(";");
+      Serial.print("; ");
       break;
     case 6:
       Serial.print("INVALID RX_P_NO!!! ");
