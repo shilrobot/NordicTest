@@ -91,7 +91,8 @@ void transmit(uint8_t csPin, uint8_t cePin, uint8_t length, uint8_t* data)
   digitalWrite(csPin, HIGH);
   
   digitalWrite(cePin, HIGH);
-  delayMicroseconds(20);
+  // This covers both Thce and Tpece2csn
+  delayMicroseconds(10);
   digitalWrite(cePin, LOW);
 }
 
@@ -112,6 +113,8 @@ void receive(uint8_t csPin, uint8_t cePin, uint8_t length, uint8_t* data)
   digitalWrite(csPin, HIGH);
   
   digitalWrite(cePin, HIGH);
+  // Cover Tpece2csn just in case
+  delayMicroseconds(4);
 }
 
 void flushTX(uint8_t csPin)
@@ -134,8 +137,10 @@ void initTX(uint8_t csPin)
 {
   writeReg(csPin, REG_CONFIG, 0x0E); // EN_CRC, CRCO, PWR_UP
   writeReg(csPin, REG_EN_AA, 0x01); // Enable auto ack on pipe 0
-  writeReg(csPin, REG_EN_RXADDR, 0x01); // Receive on 1 pipe
+  writeReg(csPin, REG_EN_RXADDR, 0x01); // Receive on pipe 0
   writeReg(csPin, REG_SETUP_AW, 0x03); // 5 bit address
+  // NOTE that ARD >= 500 us retransmit delay is critical if we are using 250 kbps, because anything
+  // less isn't enough time to actually send the ACK in.
   writeReg(csPin, REG_SETUP_RETR, 0x1F); // 500 us retransmit delay, up to 15 retransmits
   writeReg(csPin, REG_RF_CH, 0x02); // Channel 2
   writeReg(csPin, REG_RF_SETUP, 0x26); // 250 kbps 0 dBm
@@ -156,7 +161,7 @@ void initRX(uint8_t csPin)
 {
   writeReg(csPin, REG_CONFIG, 0x0F); // EN_CRC, CRCO, PWR_UP, PRIM_RX
   writeReg(csPin, REG_EN_AA, 0x01); // Enable auto ack on pipe 0
-  writeReg(csPin, REG_EN_RXADDR, 0x01); // Receive on 1 pipe
+  writeReg(csPin, REG_EN_RXADDR, 0x01); // Receive on pipe 0
   writeReg(csPin, REG_SETUP_AW, 0x03); // 5 bit address
   writeReg(csPin, REG_SETUP_RETR, 0x1F); // 500 us retransmit delay, up to 15 retransmits
   writeReg(csPin, REG_RF_CH, 0x02); // Channel 2
@@ -223,7 +228,7 @@ void setup()
   
   SPI.setDataMode(SPI_MODE0);
   SPI.setBitOrder(MSBFIRST);
-  SPI.setClockDivider(SPI_CLOCK_DIV128);
+  SPI.setClockDivider(SPI_CLOCK_DIV4);
   
   Serial.begin(115200);
   
@@ -257,6 +262,7 @@ void loop()
     if(statusRegister & (1<<5))
     {
       Serial.println("IRQ 0 reason: Data was sent!");
+      //dumpStatus(statusRegister);
       //dump_regs(CS_0);
       flushTX(CS_0);
       writeReg(CS_0, REG_STATUS, 0x70);
@@ -272,12 +278,12 @@ void loop()
       readReg(CS_0, REG_OBSERVE_TX, 1, &txObs);
       Serial.print("  Packets lost: "); Serial.println(txObs >> 4, DEC);
       Serial.print("  Retransmits: "); Serial.println(txObs & 0xF, DEC);
-      dumpStatus(statusRegister);
+      //dumpStatus(statusRegister);
       flushTX(CS_0);
       writeReg(CS_0, REG_STATUS, 0x70);
       // re-read status register
       readReg(CS_0, REG_STATUS, 1, &statusRegister);
-      dumpStatus(statusRegister);
+      //dumpStatus(statusRegister);
       transmitting = false;
       holdoff = 1000;
       /*delay(2000);
