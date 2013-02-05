@@ -130,24 +130,18 @@ void flushRX(uint8_t csPin)
   digitalWrite(csPin, HIGH);
 }
 
-void initTX(uint8_t csPin)
+void initRX(uint8_t csPin)
 {
-  writeReg(csPin, REG_CONFIG, 0x0E); // EN_CRC, CRCO, PWR_UP
+  writeReg(csPin, REG_CONFIG, 0x0F); // EN_CRC, CRCO, PWR_UP, PRIM_RX
   writeReg(csPin, REG_EN_AA, 0x01); // Enable auto ack on pipe 0
   writeReg(csPin, REG_EN_RXADDR, 0x01); // Receive on pipe 0
   writeReg(csPin, REG_SETUP_AW, 0x03); // 5 bit address
-  // NOTE that ARD >= 500 us retransmit delay is critical if we are using 250 kbps, because anything
-  // less isn't enough time to actually send the ACK in.
   writeReg(csPin, REG_SETUP_RETR, 0x1F); // 500 us retransmit delay, up to 15 retransmits
   writeReg(csPin, REG_RF_CH, 0x02); // Channel 2
   writeReg(csPin, REG_RF_SETUP, 0x26); // 250 kbps 0 dBm
   
-  // NOTE: You have to set up to RECEIVE ON THE ADDRESS YOU TRANSMIT TO
-  // to support auto ack!
-  uint8_t txAddr[] = {0x01, 0x78, 0x56, 0x34, 0x12};
-  
-  writeReg(csPin, REG_TX_ADDR, 5, txAddr);
-  writeReg(csPin, REG_RX_ADDR_P0, 5, txAddr);
+  uint8_t rxAddr[] = {0x01, 0x78, 0x56, 0x34, 0x12};
+  writeReg(csPin, REG_RX_ADDR_P0, 5, rxAddr);
   
   writeReg(csPin, REG_RX_PW_P0, 32);
   writeReg(csPin, REG_DYNPD, 0);
@@ -200,51 +194,60 @@ void setup()
   SPI.setBitOrder(MSBFIRST);
   SPI.setClockDivider(SPI_CLOCK_DIV4);
   
-  Serial.begin(115200);
+  Serial.begin(9600);
   
   // wait for module to boot up (generously)
   delay(250);
   
   Serial.println("Initializing module");
-  initTX(PIN_CS);
-  flushTX(PIN_CS);
+  initRX(PIN_CS);
+  flushRX(PIN_CS);
   dump_regs(PIN_CS);
   Serial.println("Module init completed");
-  
+    
   // wait for power on (generously)
   delay(250);
+  
+  digitalWrite(PIN_CE, HIGH);
 }
 
 void loop()
 {
-  Serial.println("Transmitting...");
-  transmit(PIN_CS, PIN_CE, sizeof(helloWorld), (uint8_t*)helloWorld);
-  
-  Serial.println("Waiting for IRQ...");
-  while(digitalRead(PIN_IRQ));
-  
-  uint8_t statusRegister;
-  readReg(PIN_CS, REG_STATUS, 1, &statusRegister);
-  if(statusRegister & (1<<5))
-  {
-    Serial.println("IRQ reason: Data was sent!");
-    flushTX(PIN_CS);
+  if(digitalRead(PIN_IRQ) != HIGH)
+  {    
+    Serial.println("IRQ asserted");
+    //uint8_t statusRegister;
+    uint8_t fifoStatus;
+    //readReg(CS_1, REG_STATUS, 1, &statusRegister);
+    readReg(PIN_CS, REG_FIFO_STATUS, 1, &fifoStatus);
+    
+    bool read = false;
+    
+    // While FIFO is not empty
+    while(!(fifoStatus & 0x01))
+    {
+      read = true;
+      char buf[32];
+      receive(PIN_CS, PIN_CE, sizeof(buf), (uint8_t*)buf);
+      Serial.println("Received data: ");
+      for(int i=0; i<32; ++i)
+        Serial.write(buf[i]);
+      Serial.println();
+      
+      readReg(PIN_CS, REG_FIFO_STATUS, 1, &fifoStatus);
+    }
+    
+    // clear status register
     writeReg(PIN_CS, REG_STATUS, 0x70);
+    
+    digitalWrite(13, HIGH);
+    delay(100);
+    digitalWrite(13, LOW);
   }
-  else if(statusRegister & (1<<4))
-  {
-    Serial.println("IRQ reason: Max retransmissions hit!");
-    uint8_t txObs;
-    readReg(PIN_CS, REG_OBSERVE_TX, 1, &txObs);
-    Serial.print("  Packets lost: "); Serial.println(txObs >> 4, DEC);
-    Serial.print("  Retransmits: "); Serial.println(txObs & 0xF, DEC);
-    flushTX(PIN_CS);
-    writeReg(PIN_CS, REG_STATUS, 0x70);
-  }
-
-  delay(500);
 }
 
+void dump_regs(uint8_t pin) { }
+#if 0
   
 void dump_regs(uint8_t pin)
 {
@@ -482,4 +485,4 @@ void print_addr(uint8_t* addr)
     Serial.print(addr[i], HEX);
   }  
 }
-
+#endif
