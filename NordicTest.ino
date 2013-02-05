@@ -90,9 +90,9 @@ void transmit(uint8_t csPin, uint8_t cePin, uint8_t length, uint8_t* data)
   SPI.end();
   digitalWrite(csPin, HIGH);
   
-  /*digitalWrite(cePin, HIGH);
+  digitalWrite(cePin, HIGH);
   delayMicroseconds(20);
-  digitalWrite(cePin, LOW);*/
+  digitalWrite(cePin, LOW);
 }
 
 void receive(uint8_t csPin, uint8_t cePin, uint8_t length, uint8_t* data)
@@ -140,11 +140,12 @@ void initTX(uint8_t csPin)
   writeReg(csPin, REG_RF_CH, 0x02); // Channel 2
   writeReg(csPin, REG_RF_SETUP, 0x26); // 250 kbps 0 dBm
   
-  uint8_t rxAddr[] = {0x00, 0x78, 0x56, 0x34, 0x12};
-  writeReg(csPin, REG_RX_ADDR_P0, 5, rxAddr);
-  
+  // NOTE: You have to set up to RECEIVE ON THE ADDRESS YOU TRANSMIT TO
+  // to support auto ack!
   uint8_t txAddr[] = {0x01, 0x78, 0x56, 0x34, 0x12};
+  
   writeReg(csPin, REG_TX_ADDR, 5, txAddr);
+  writeReg(csPin, REG_RX_ADDR_P0, 5, txAddr);
   
   writeReg(csPin, REG_RX_PW_P0, 32);
   writeReg(csPin, REG_DYNPD, 0);
@@ -163,9 +164,6 @@ void initRX(uint8_t csPin)
   
   uint8_t rxAddr[] = {0x01, 0x78, 0x56, 0x34, 0x12};
   writeReg(csPin, REG_RX_ADDR_P0, 5, rxAddr);
-  
-  uint8_t txAddr[] = {0x00, 0x78, 0x56, 0x34, 0x12};
-  writeReg(csPin, REG_TX_ADDR, 5, txAddr);
   
   writeReg(csPin, REG_RX_PW_P0, 32);
   writeReg(csPin, REG_DYNPD, 0);
@@ -195,7 +193,10 @@ void dumpStatus(uint8_t statusReg)
   Serial.println();
 }
 
-static const char helloWorld[32] = "Hello World!";
+static char helloWorld[32] = "Hello World! 0";
+
+int transmitting = false;
+int holdoff = 250;
 
 void setup()
 {
@@ -231,6 +232,8 @@ void setup()
   
   initTX(CS_0);
   initRX(CS_1);
+  flushTX(CS_0);
+  flushRX(CS_1);
   
   // wait for power on (generously)
   delay(250);
@@ -240,16 +243,13 @@ void setup()
   Serial.println("Unit 1:");
   dump_regs(CS_1);
   
+  //digitalWrite(CE_0, HIGH);
   digitalWrite(CE_1, HIGH);
-  digitalWrite(CE_0, HIGH);
-  
-  transmit(CS_0, CE_0, sizeof(helloWorld), (uint8_t*)helloWorld);
 }
-
 
 void loop()
 {  
-  if(digitalRead(IRQ_0) != HIGH)
+  if(transmitting && digitalRead(IRQ_0) != HIGH)
   {
     uint8_t statusRegister;
     readReg(CS_0, REG_STATUS, 1, &statusRegister);
@@ -257,44 +257,80 @@ void loop()
     if(statusRegister & (1<<5))
     {
       Serial.println("IRQ 0 reason: Data was sent!");
-      dump_regs(CS_0);
+      //dump_regs(CS_0);
       flushTX(CS_0);
       writeReg(CS_0, REG_STATUS, 0x70);
-      delay(2000);
-      transmit(CS_0, CE_0, sizeof(helloWorld), (uint8_t*)helloWorld);
+      transmitting = false;
+      holdoff = 1000;
+      /*delay(2000);
+      transmit(CS_0, CE_0, sizeof(helloWorld), (uint8_t*)helloWorld);*/
     }
     else if(statusRegister & (1<<4))
     {
       Serial.println("IRQ 0 reason: Max retransmissions hit!");
+      uint8_t txObs;
+      readReg(CS_0, REG_OBSERVE_TX, 1, &txObs);
+      Serial.print("  Packets lost: "); Serial.println(txObs >> 4, DEC);
+      Serial.print("  Retransmits: "); Serial.println(txObs & 0xF, DEC);
       dumpStatus(statusRegister);
       flushTX(CS_0);
       writeReg(CS_0, REG_STATUS, 0x70);
       // re-read status register
       readReg(CS_0, REG_STATUS, 1, &statusRegister);
       dumpStatus(statusRegister);
-      delay(2000);
+      transmitting = false;
+      holdoff = 1000;
+      /*delay(2000);
+      transmit(CS_0, CE_0, sizeof(helloWorld), (uint8_t*)helloWorld);*/
+    }
+  }
+  
+  if(!transmitting)
+  {
+    if(holdoff > 0)
+    {
+      --holdoff;
+    }
+    
+    if(holdoff <= 0)
+    {
+      transmitting = true;
+      Serial.println("Transmitting.");
+      helloWorld[13]++;
+      if(helloWorld[13] > '9')
+        helloWorld[13] = '0';
       transmit(CS_0, CE_0, sizeof(helloWorld), (uint8_t*)helloWorld);
     }
   }
   
   if(digitalRead(IRQ_1) != HIGH)
-  {
+  {    
     Serial.println("IRQ 1 asserted");
-    uint8_t statusRegister;
-    readReg(CS_1, REG_STATUS, 1, &statusRegister);
-    char buf[32];
-    receive(CS_1, CE_1, sizeof(buf), (uint8_t*)buf);
-    Serial.println("Received data!");
-    for(int i=0; i<32; ++i)
-      Serial.write(buf[i]);
-    Serial.println();
+    //uint8_t statusRegister;
+    uint8_t fifoStatus;
+    //readReg(CS_1, REG_STATUS, 1, &statusRegister);
+    readReg(CS_1, REG_FIFO_STATUS, 1, &fifoStatus);
+    // While FIFO is not empty
+    while(!(fifoStatus & 0x01))
+    {
+      char buf[32];
+      receive(CS_1, CE_1, sizeof(buf), (uint8_t*)buf);
+      Serial.println("Received data: ");
+      for(int i=0; i<32; ++i)
+        Serial.write(buf[i]);
+      Serial.println();
+      
+      readReg(CS_1, REG_FIFO_STATUS, 1, &fifoStatus);
+    }
     
     // clear status register
     writeReg(CS_1, REG_STATUS, 0x70);
   }
+  
+  delay(1);
 }
 
-#if 1
+#if 0
 //#ifdef DUMP_REGS
 
   
@@ -535,5 +571,8 @@ void print_addr(uint8_t* addr)
   }  
 }
 
-#endif // DUMP_REGS
+#else // DUMP_REGS
+
+void dump_regs(uint8_t) {}
+#endif
 
