@@ -1,9 +1,7 @@
 #include <SPI.h>
 
-#define PIN_CS 7
 #define PIN_CE 8
 #define PIN_IRQ 9
-
 #define PIN_SS 10
 #define PIN_MOSI 11
 #define PIN_MISO 12
@@ -40,8 +38,8 @@ void dump_regs(uint8_t pin);
 
 void readReg(uint8_t csPin, uint8_t addr, uint8_t length, uint8_t* data)
 {
-  digitalWrite(csPin, LOW);
   SPI.begin();
+  digitalWrite(csPin, LOW);
   SPI.transfer(addr & 0x1F);
   while(length > 0)
   {
@@ -60,8 +58,8 @@ void writeReg(uint8_t csPin, uint8_t addr, uint8_t data)
 
 void writeReg(uint8_t csPin, uint8_t addr, uint8_t length, uint8_t* data)
 {
-  digitalWrite(csPin, LOW);
   SPI.begin();
+  digitalWrite(csPin, LOW);
   SPI.transfer(0x20 | (addr & 0x1F));
   while(length > 0)
   {
@@ -75,8 +73,8 @@ void writeReg(uint8_t csPin, uint8_t addr, uint8_t length, uint8_t* data)
 
 void transmit(uint8_t csPin, uint8_t cePin, uint8_t length, uint8_t* data)
 {
-  digitalWrite(csPin, LOW);
   SPI.begin();
+  digitalWrite(csPin, LOW);
   SPI.transfer(0xA0);
   while(length > 0)
   {
@@ -97,8 +95,8 @@ void receive(uint8_t csPin, uint8_t cePin, uint8_t length, uint8_t* data)
 {
   digitalWrite(cePin, LOW);
   
-  digitalWrite(csPin, LOW);
   SPI.begin();
+  digitalWrite(csPin, LOW);
   SPI.transfer(0x61);
   while(length > 0)
   {
@@ -116,16 +114,16 @@ void receive(uint8_t csPin, uint8_t cePin, uint8_t length, uint8_t* data)
 
 void flushTX(uint8_t csPin)
 {
-  digitalWrite(csPin, LOW);
   SPI.begin();
+  digitalWrite(csPin, LOW);
   SPI.transfer(0xE1);
   digitalWrite(csPin, HIGH);
 }
 
 void flushRX(uint8_t csPin)
 {
-  digitalWrite(csPin, LOW);
   SPI.begin();
+  digitalWrite(csPin, LOW);
   SPI.transfer(0xE2);
   digitalWrite(csPin, HIGH);
 }
@@ -181,20 +179,18 @@ static char helloWorld[32] = "Hello World!";
 
 void setup()
 {
+  digitalWrite(PIN_CE, LOW);
+  digitalWrite(PIN_SS, HIGH);
+  digitalWrite(PIN_MOSI, LOW);
+  digitalWrite(PIN_SCK, LOW);
+  
   pinMode(PIN_CE, OUTPUT);
   pinMode(PIN_SS, OUTPUT);
-  pinMode(PIN_CS, OUTPUT);
   pinMode(PIN_MOSI, OUTPUT);
   pinMode(PIN_SCK, OUTPUT);
   
   pinMode(PIN_IRQ, INPUT); 
   pinMode(PIN_MISO, INPUT);
-  
-  digitalWrite(PIN_CE, LOW);
-  digitalWrite(PIN_SS, HIGH);
-  digitalWrite(PIN_CS, HIGH);
-  digitalWrite(PIN_MOSI, LOW);
-  digitalWrite(PIN_SCK, LOW);
   
   SPI.setDataMode(SPI_MODE0);
   SPI.setBitOrder(MSBFIRST);
@@ -206,9 +202,9 @@ void setup()
   delay(250);
   
   Serial.println("Initializing module");
-  initTX(PIN_CS);
-  flushTX(PIN_CS);
-  dump_regs(PIN_CS);
+  initTX(PIN_SS);
+  flushTX(PIN_SS);
+  dump_regs(PIN_SS);
   Serial.println("Module init completed");
   
   // wait for power on (generously)
@@ -216,30 +212,30 @@ void setup()
 }
 
 void loop()
-{
+{  
   Serial.println("Transmitting...");
-  transmit(PIN_CS, PIN_CE, sizeof(helloWorld), (uint8_t*)helloWorld);
+  transmit(PIN_SS, PIN_CE, sizeof(helloWorld), (uint8_t*)helloWorld);
   
   Serial.println("Waiting for IRQ...");
   while(digitalRead(PIN_IRQ));
   
   uint8_t statusRegister;
-  readReg(PIN_CS, REG_STATUS, 1, &statusRegister);
+  readReg(PIN_SS, REG_STATUS, 1, &statusRegister);
   if(statusRegister & (1<<5))
   {
     Serial.println("IRQ reason: Data was sent!");
-    flushTX(PIN_CS);
-    writeReg(PIN_CS, REG_STATUS, 0x70);
+    flushTX(PIN_SS);
+    writeReg(PIN_SS, REG_STATUS, 0x70);
   }
   else if(statusRegister & (1<<4))
   {
     Serial.println("IRQ reason: Max retransmissions hit!");
     uint8_t txObs;
-    readReg(PIN_CS, REG_OBSERVE_TX, 1, &txObs);
+    readReg(PIN_SS, REG_OBSERVE_TX, 1, &txObs);
     Serial.print("  Packets lost: "); Serial.println(txObs >> 4, DEC);
     Serial.print("  Retransmits: "); Serial.println(txObs & 0xF, DEC);
-    flushTX(PIN_CS);
-    writeReg(PIN_CS, REG_STATUS, 0x70);
+    flushTX(PIN_SS);
+    writeReg(PIN_SS, REG_STATUS, 0x70);
   }
 
   delay(500);
