@@ -1,6 +1,8 @@
 #include <SPI.h>
 #include <avr/pgmspace.h>
 
+#define PIN_BTN_OUT 3
+
 #define PIN_CE 8
 #define PIN_IRQ 9
 #define PIN_SS 10
@@ -159,7 +161,7 @@ void initRX(uint8_t csPin)
   uint8_t rxAddr[] = {0x01, 0x78, 0x56, 0x34, 0x12};
   writeReg(csPin, REG_RX_ADDR_P0, 5, rxAddr);
   
-  writeReg(csPin, REG_RX_PW_P0, 32);
+  writeReg(csPin, REG_RX_PW_P0, 1);
   writeReg(csPin, REG_DYNPD, 0);
   writeReg(csPin, REG_FEATURE, 0);
 }
@@ -195,11 +197,13 @@ void setup()
   digitalWrite(PIN_SS, HIGH);
   digitalWrite(PIN_MOSI, LOW);
   digitalWrite(PIN_SCK, LOW);
+  digitalWrite(PIN_BTN_OUT, LOW);
   
   pinMode(PIN_CE, OUTPUT);
   pinMode(PIN_SS, OUTPUT);
   pinMode(PIN_MOSI, OUTPUT);
   pinMode(PIN_SCK, OUTPUT);
+  pinMode(PIN_BTN_OUT, OUTPUT);
   pinMode(PIN_IRQ, INPUT); 
   pinMode(PIN_MISO, INPUT);
   
@@ -235,7 +239,7 @@ void loop()
   // TODO: Should we drop the CE pin in here somewhere?
   if(digitalRead(PIN_IRQ) != HIGH)
   {    
-    Serial.println("IRQ asserted");
+    //Serial.println("IRQ asserted");
     //uint8_t statusRegister;
     uint8_t fifoStatus;
     //readReg(CS_1, REG_STATUS, 1, &statusRegister);
@@ -248,11 +252,16 @@ void loop()
     {
       read = true;
       char buf[32];
-      receive(PIN_SS, PIN_CE, sizeof(buf), (uint8_t*)buf);
-      Serial.println("Received data: ");
+      receive(PIN_SS, PIN_CE, 1, (uint8_t*)buf);
+      /*Serial.println("Received data: ");
       for(int i=0; i<32; ++i)
         Serial.write(buf[i]);
-      Serial.println();
+      Serial.println();*/
+      if((uint8_t)buf[0] == 0x00)
+        PORTD |= _BV(3);
+      else if((uint8_t)buf[0] == 0xFF)
+        PORTD &= ~_BV(3);
+        Serial.println((uint8_t)buf[0]);
       
       readReg(PIN_SS, REG_FIFO_STATUS, 1, &fifoStatus);
     }
@@ -260,12 +269,6 @@ void loop()
     // clear status register to clear the assert
     writeReg(PIN_SS, REG_STATUS, 0x70);
     
-    if(read) 
-    {
-      digitalWrite(13, HIGH);
-      delay(100);
-      digitalWrite(13, LOW);
-    }
   }
 }
   

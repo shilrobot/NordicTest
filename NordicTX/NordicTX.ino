@@ -1,5 +1,6 @@
 #include <SPI.h>
 
+#define PIN_BTN 2
 #define PIN_CE 8
 #define PIN_IRQ 9
 #define PIN_SS 10
@@ -147,7 +148,7 @@ void initTX(uint8_t csPin)
   writeReg(csPin, REG_TX_ADDR, 5, txAddr);
   writeReg(csPin, REG_RX_ADDR_P0, 5, txAddr);
   
-  writeReg(csPin, REG_RX_PW_P0, 32);
+  writeReg(csPin, REG_RX_PW_P0, 1);
   writeReg(csPin, REG_DYNPD, 0);
   writeReg(csPin, REG_FEATURE, 0);
 }
@@ -177,6 +178,8 @@ void dumpStatus(uint8_t statusReg)
 
 static char helloWorld[32] = "Hello World!";
 
+static uint8_t lastButtonVal = 0;
+
 void setup()
 {
   digitalWrite(PIN_CE, LOW);
@@ -184,6 +187,7 @@ void setup()
   digitalWrite(PIN_MOSI, LOW);
   digitalWrite(PIN_SCK, LOW);
   
+  // pullup  
   pinMode(PIN_CE, OUTPUT);
   pinMode(PIN_SS, OUTPUT);
   pinMode(PIN_MOSI, OUTPUT);
@@ -191,6 +195,8 @@ void setup()
   
   pinMode(PIN_IRQ, INPUT); 
   pinMode(PIN_MISO, INPUT);
+  pinMode(PIN_BTN, INPUT);
+  digitalWrite(PIN_BTN, HIGH);
   
   SPI.setDataMode(SPI_MODE0);
   SPI.setBitOrder(MSBFIRST);
@@ -213,6 +219,40 @@ void setup()
 
 void loop()
 {  
+  while(1)
+  {
+    uint8_t buttonVal = (PIND & _BV(2)) ? 0xFF : 0x00;
+    if(buttonVal != lastButtonVal)
+    {
+        //Serial.println("button change");
+      lastButtonVal = buttonVal;      
+      helloWorld[0] = buttonVal;
+      transmit(PIN_SS, PIN_CE, 1, (uint8_t*)helloWorld);
+      
+      while(digitalRead(PIN_IRQ));
+    
+      uint8_t statusRegister;
+      readReg(PIN_SS, REG_STATUS, 1, &statusRegister);
+      if(statusRegister & (1<<5))
+      {
+        /*Serial.println("IRQ reason: Data was sent!");*/
+        // TODO: maybe unnecessary
+        flushTX(PIN_SS);
+        writeReg(PIN_SS, REG_STATUS, 0x70);
+      }
+      else if(statusRegister & (1<<4))
+      {
+        Serial.println("Max retransmissions hit!");
+        /*uint8_t txObs;
+        readReg(PIN_SS, REG_OBSERVE_TX, 1, &txObs);
+        Serial.print("  Packets lost: "); Serial.println(txObs >> 4, DEC);
+        Serial.print("  Retransmits: "); Serial.println(txObs & 0xF, DEC);*/
+        flushTX(PIN_SS);
+        writeReg(PIN_SS, REG_STATUS, 0x70);
+      }
+    }    
+  }
+  /*
   Serial.println("Transmitting...");
   transmit(PIN_SS, PIN_CE, sizeof(helloWorld), (uint8_t*)helloWorld);
   
@@ -238,7 +278,7 @@ void loop()
     writeReg(PIN_SS, REG_STATUS, 0x70);
   }
 
-  delay(500);
+  delay(500);*/
 }
 
   
